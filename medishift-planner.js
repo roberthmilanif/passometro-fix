@@ -804,7 +804,7 @@ function openScheduleEditor(dayKey, dayEntries, monthKey) {
 
 // Utility Functions
 function generateId() {
-    return 'pat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    return 'pat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
 }
 
 function getPriorityClass(priority) {
@@ -880,11 +880,11 @@ function updatePrintView() {
     `).join('');
 }
 
-function openPrintView() {
+function openPrintWindow(errorLabel) {
     const printHtml = buildPrintHtml();
     const win = window.open('', '_blank', 'width=1200,height=800');
     if (!win) {
-        showError('Bloqueador de pop-up impediu a abertura da impressão.');
+        showError(`Bloqueador de pop-up impediu a abertura ${errorLabel}.`);
         return;
     }
     win.document.open();
@@ -896,20 +896,12 @@ function openPrintView() {
     };
 }
 
+function openPrintView() {
+    openPrintWindow('da impressão');
+}
+
 function exportPdfFromBrowser() {
-    const printHtml = buildPrintHtml();
-    const win = window.open('', '_blank', 'width=1200,height=800');
-    if (!win) {
-        showError('Bloqueador de pop-up impediu a abertura do PDF.');
-        return;
-    }
-    win.document.open();
-    win.document.write(printHtml);
-    win.document.close();
-    win.focus();
-    win.onload = () => {
-        win.print();
-    };
+    openPrintWindow('do PDF');
 }
 
 function buildPrintHtml() {
