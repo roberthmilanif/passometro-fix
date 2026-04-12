@@ -45,7 +45,7 @@ function initializeApp() {
 function setupEventListeners() {
     // Helper: safely add listener only when element exists
     function on(id, event, handler) {
-        var el = $(id);
+        const el = $(id);
         if (el) el.addEventListener(event, handler);
     }
 
@@ -234,17 +234,17 @@ function updateAuthorFilter() {
 
 // Render Functions
 function showPatientsTab() {
-    var v = $('patientsView'); if (v) v.style.display = 'block';
-    var s = $('scheduleView'); if (s) s.style.display = 'none';
-    var tb = $('tabPatientsBtn'); if (tb) tb.classList.add('active');
-    var ts = $('tabScheduleBtn'); if (ts) ts.classList.remove('active');
+    const patientsView = $('patientsView'); if (patientsView) patientsView.style.display = 'block';
+    const scheduleView = $('scheduleView'); if (scheduleView) scheduleView.style.display = 'none';
+    const patientsBtn = $('tabPatientsBtn'); if (patientsBtn) patientsBtn.classList.add('active');
+    const scheduleBtn = $('tabScheduleBtn'); if (scheduleBtn) scheduleBtn.classList.remove('active');
 }
 
 function showScheduleTab() {
-    var v = $('patientsView'); if (v) v.style.display = 'none';
-    var s = $('scheduleView'); if (s) s.style.display = 'block';
-    var ts = $('tabScheduleBtn'); if (ts) ts.classList.add('active');
-    var tb = $('tabPatientsBtn'); if (tb) tb.classList.remove('active');
+    const patientsView = $('patientsView'); if (patientsView) patientsView.style.display = 'none';
+    const scheduleView = $('scheduleView'); if (scheduleView) scheduleView.style.display = 'block';
+    const scheduleBtn = $('tabScheduleBtn'); if (scheduleBtn) scheduleBtn.classList.add('active');
+    const patientsBtn = $('tabPatientsBtn'); if (patientsBtn) patientsBtn.classList.remove('active');
     renderSchedule();
 }
 
@@ -389,12 +389,12 @@ function openModal(patientId = null) {
     if (patientId) {
         const patient = allPatients.find(p => p.id === patientId);
         if (patient) {
-            var title = $('modalTitle');
+            const title = $('modalTitle');
             if (title) title.textContent = 'Editar Paciente';
             fillFormWithPatient(patient);
         }
     } else {
-        var title = $('modalTitle');
+        const title = $('modalTitle');
         if (title) title.textContent = 'Adicionar Paciente';
         setDefaultAdmissionDate();
     }
@@ -403,16 +403,16 @@ function openModal(patientId = null) {
 }
 
 function closeModal() {
-    var modal = $('patientModal');
+    const modal = $('patientModal');
     if (modal) modal.style.display = 'none';
-    var form = $('patientForm');
+    const form = $('patientForm');
     if (form) form.reset();
     currentAntibiotics = [];
     renderAntibioticsEditor();
 }
 
 function fillFormWithPatient(patient) {
-    function setVal(id, val) { var el = $(id); if (el) el.value = val; }
+    function setVal(id, value) { const el = $(id); if (el) el.value = value; }
     setVal('patientId', patient.id);
     setVal('patientName', patient.name || '');
     setVal('bedNumber', patient.bedNumber || '');
@@ -446,20 +446,20 @@ async function handleFormSubmit(e) {
         const isNew = !existingId;
 
         const nowISO = new Date().toISOString();
-        function val(id) { var el = $(id); return el ? el.value.trim() : ''; }
+        function fieldVal(id) { const el = $(id); return el ? el.value.trim() : ''; }
         const patientData = {
             id: existingId || generateId(),
-            name: val('patientName'),
-            bedNumber: val('bedNumber'),
+            name: fieldVal('patientName'),
+            bedNumber: fieldVal('bedNumber'),
             admissionDate: ($('admissionDate') || {}).value || '',
             priority: ($('priority') || {}).value || 'Baixa',
-            diagnosis: val('diagnosis'),
-            currentCondition: val('currentCondition'),
-            pendingActions: val('pendingActions'),
-            nextSteps: val('nextSteps'),
-            shiftRole: val('shiftRole'),
-            shiftDetails: val('shiftDetails'),
-            author: val('author'),
+            diagnosis: fieldVal('diagnosis'),
+            currentCondition: fieldVal('currentCondition'),
+            pendingActions: fieldVal('pendingActions'),
+            nextSteps: fieldVal('nextSteps'),
+            shiftRole: fieldVal('shiftRole'),
+            shiftDetails: fieldVal('shiftDetails'),
+            author: fieldVal('author'),
             antibiotics: collectAntibiotics(),
             lastModified: nowISO
         };
@@ -924,8 +924,8 @@ function escapeHtml(text) {
 }
 
 function showLoading(show) {
-    var ls = $('loadingState'); if (ls) ls.style.display = show ? 'flex' : 'none';
-    var pg = $('patientsGrid'); if (pg) pg.style.display = show ? 'none' : 'grid';
+    const ls = $('loadingState'); if (ls) ls.style.display = show ? 'flex' : 'none';
+    const pg = $('patientsGrid'); if (pg) pg.style.display = show ? 'none' : 'grid';
 }
 
 function showSuccess(message) {
@@ -1024,7 +1024,7 @@ document.addEventListener('keydown', (e) => {
     // Ctrl/Cmd + K to focus search
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        var si = $('searchInput');
-        if (si) si.focus();
+        const searchInput = $('searchInput');
+        if (searchInput) searchInput.focus();
     }
 });
