@@ -22,7 +22,7 @@ There is no build system, no package manager, no test suite, and no CI pipeline.
 
 ## The Single Source File
 
-`medishift-planner.js` (~960 lines) is organized into logical sections separated by comments:
+`medishift-planner.js` (~950 lines) is organized into logical sections separated by comments:
 
 | Lines | Section |
 |-------|---------|

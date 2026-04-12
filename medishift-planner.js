@@ -389,6 +389,7 @@ async function handleFormSubmit(e) {
     const existingId = document.getElementById('patientId').value;
     const isNew = !existingId;
 
+    const nowISO = new Date().toISOString();
     const patientData = {
         id: existingId || generateId(),
         name: document.getElementById('patientName').value.trim(),
@@ -403,8 +404,11 @@ async function handleFormSubmit(e) {
         shiftDetails: document.getElementById('shiftDetails').value.trim(),
         author: document.getElementById('author').value.trim(),
         antibiotics: collectAntibiotics(),
-        lastModified: new Date().toISOString()
+        lastModified: nowISO
     };
+    if (isNew) {
+        patientData.createdAt = nowISO;
+    }
 
     await savePatient(patientData, isNew);
 }
@@ -607,7 +611,8 @@ async function renderSchedule() {
     const meta = document.getElementById('scheduleMeta');
     if (!grid || !meta) return;
 
-    const month = new Date(2026, 3 + scheduleMonthOffset, 1);
+    const now = new Date();
+    const month = new Date(now.getFullYear(), now.getMonth() + scheduleMonthOffset, 1);
     const monthKey = `${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}`;
     const seed = scheduleData[monthKey] || scheduleData['2026-04'];
     const today = new Date();
@@ -859,48 +864,22 @@ function updatePrintView() {
 
     const sorted = [...filteredPatients].sort((a, b) => (a.bedNumber || '').localeCompare(b.bedNumber || '', 'pt-BR', { numeric: true }));
     printMeta.textContent = `${sorted.length} paciente(s) • Gerado em ${new Date().toLocaleString('pt-BR')}`;
-    printList.innerHTML = sorted.map(patient => `
-        <article class="print-patient">
-            <header class="print-patient-header">
-                <h3>${escapeHtml(patient.name)}</h3>
-                <div class="print-badges">
-                    <span class="print-badge">Leito ${escapeHtml(patient.bedNumber || '-')}</span>
-                    <span class="print-badge">${escapeHtml(patient.priority || 'Baixa')}</span>
-                </div>
-            </header>
-            <div class="print-row"><strong>DIH:</strong> ${calculateDIH(patient.admissionDate) ?? '-'}</div>
-            <div class="print-row"><strong>Admissão:</strong> ${patient.admissionDate || '-'}</div>
-            <div class="print-row"><strong>Diagnóstico:</strong> ${escapeHtml(patient.diagnosis || '-')}</div>
-            <div class="print-row"><strong>Antibióticos:</strong> ${normalizeAntibiotics(patient.antibiotics).map(ab => `${escapeHtml(ab.name)}${ab.startDate ? ` (${ab.startDate})` : ''}`).join(', ') || '-'}</div>
-            <div class="print-row"><strong>Condição Atual:</strong> ${escapeHtml(patient.currentCondition || '-')}</div>
-            <div class="print-row"><strong>Pendências:</strong> ${escapeHtml(patient.pendingActions || '-')}</div>
-            <div class="print-row"><strong>Próximos Passos:</strong> ${escapeHtml(patient.nextSteps || '-')}</div>
-            <div class="print-row"><strong>Autor:</strong> ${escapeHtml(patient.author || '-')}</div>
-        </article>
-    `).join('');
+    printList.innerHTML = sorted.map(buildPatientPrintRow).join('');
 }
 
 function openPrintView() {
-    const printHtml = buildPrintHtml();
-    const win = window.open('', '_blank', 'width=1200,height=800');
-    if (!win) {
-        showError('Bloqueador de pop-up impediu a abertura da impressão.');
-        return;
-    }
-    win.document.open();
-    win.document.write(printHtml);
-    win.document.close();
-    win.focus();
-    win.onload = () => {
-        win.print();
-    };
+    openPrintWindow('Bloqueador de pop-up impediu a abertura da impressão.');
 }
 
 function exportPdfFromBrowser() {
+    openPrintWindow('Bloqueador de pop-up impediu a abertura do PDF.');
+}
+
+function openPrintWindow(blockedMessage) {
     const printHtml = buildPrintHtml();
     const win = window.open('', '_blank', 'width=1200,height=800');
     if (!win) {
-        showError('Bloqueador de pop-up impediu a abertura do PDF.');
+        showError(blockedMessage);
         return;
     }
     win.document.open();
@@ -912,9 +891,8 @@ function exportPdfFromBrowser() {
     };
 }
 
-function buildPrintHtml() {
-    const sorted = [...filteredPatients].sort((a, b) => (a.bedNumber || '').localeCompare(b.bedNumber || '', 'pt-BR', { numeric: true }));
-    const rows = sorted.map(patient => `
+function buildPatientPrintRow(patient) {
+    return `
         <article class="print-patient">
             <header class="print-patient-header">
                 <h3>${escapeHtml(patient.name)}</h3>
@@ -932,24 +910,36 @@ function buildPrintHtml() {
             <div class="print-row"><strong>Próximos Passos:</strong> ${escapeHtml(patient.nextSteps || '-')}</div>
             <div class="print-row"><strong>Autor:</strong> ${escapeHtml(patient.author || '-')}</div>
         </article>
-    `).join('');
+    `;
+}
+
+function buildPrintHtml() {
+    const sorted = [...filteredPatients].sort((a, b) => (a.bedNumber || '').localeCompare(b.bedNumber || '', 'pt-BR', { numeric: true }));
+    const rows = sorted.map(buildPatientPrintRow).join('');
 
     return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Passômetro PDF</title><link rel="stylesheet" href="styles.css"></head><body><section class="print-area" style="display:block;padding:24px;background:#fff"><div class="print-header"><h2>Passômetro - Relatório de Pacientes</h2><p>${sorted.length} paciente(s) • ${new Date().toLocaleString('pt-BR')}</p></div><div class="print-list">${rows || '<p>Nenhum paciente para imprimir.</p>'}</div></section><script>window.onload=()=>window.print();</script></body></html>`;
 }
 
 // Close modal when clicking outside
-window.onclick = function(event) {
+window.addEventListener('click', function(event) {
     const modal = document.getElementById('patientModal');
-    if (event.target === modal) {
+    if (modal && event.target === modal) {
         closeModal();
     }
-}
+});
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
     // ESC to close modal
     if (e.key === 'Escape') {
-        closeModal();
+        const modal = document.getElementById('patientModal');
+        if (modal && modal.style.display !== 'none') {
+            closeModal();
+        }
+        const scheduleEditor = document.getElementById('scheduleEditorModal');
+        if (scheduleEditor) {
+            scheduleEditor.remove();
+        }
     }
     
     // Ctrl/Cmd + K to focus search
