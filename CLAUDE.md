@@ -164,7 +164,7 @@ Since there is no test suite, validate changes by:
 
 ## Git Branch
 
-Active development branch: `claude/add-claude-documentation-Tlk0X`  
+Active development branch: `copilot/ajustar-openclaw`  
 Production branch: `main`
 
 Push fixes to the active branch; do not push directly to `main`.

@@ -5,6 +5,7 @@
 // Keep the same Google Apps Script URL as the existing deployment.
 const API_URL = window.__API_URL__ || '/api/patients';
 const SCHEDULE_API = window.__SCHEDULE_API__ || '/api/schedule';
+const FETCH_TIMEOUT_MS = 15000; // 15 seconds max per request
 
 // State
 let allPatients = [];
@@ -12,6 +13,22 @@ let filteredPatients = [];
 let currentAntibiotics = [];
 let printWindowRef = null;
 let scheduleMonthOffset = 0;
+let _isSubmitting = false;
+let _searchDebounceTimer = null;
+
+// Safe DOM helper — returns element or null without throwing
+function $(id) {
+    return document.getElementById(id);
+}
+
+// Fetch with timeout to prevent hanging requests
+function fetchWithTimeout(url, options, timeoutMs) {
+    const ms = timeoutMs || FETCH_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    const opts = Object.assign({}, options, { signal: controller.signal });
+    return fetch(url, opts).finally(() => clearTimeout(timer));
+}
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -19,36 +36,45 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function initializeApp() {
+    try { setupEventListeners(); } catch (e) { console.error('setupEventListeners failed:', e); }
+    try { setDefaultAdmissionDate(); } catch (e) { console.error('setDefaultAdmissionDate failed:', e); }
     loadPatients();
-    setupEventListeners();
-    setDefaultAdmissionDate();
     renderSchedule();
 }
 
 function setupEventListeners() {
+    // Helper: safely add listener only when element exists
+    function on(id, event, handler) {
+        var el = $(id);
+        if (el) el.addEventListener(event, handler);
+    }
+
     // Header actions
-    document.getElementById('tabPatientsBtn').addEventListener('click', () => showPatientsTab());
-    document.getElementById('tabScheduleBtn').addEventListener('click', () => showScheduleTab());
-    document.getElementById('addPatientBtn').addEventListener('click', () => openModal());
-    document.getElementById('refreshBtn').addEventListener('click', () => loadPatients());
-    document.getElementById('printBtn').addEventListener('click', openPrintView);
-    document.getElementById('pdfBtn').addEventListener('click', exportPdfFromBrowser);
-    document.getElementById('schedulePrevBtn').addEventListener('click', () => { scheduleMonthOffset--; renderSchedule(); });
-    document.getElementById('scheduleNextBtn').addEventListener('click', () => { scheduleMonthOffset++; renderSchedule(); });
-    document.getElementById('scheduleTodayBtn').addEventListener('click', () => { scheduleMonthOffset = 0; renderSchedule(); });
+    on('tabPatientsBtn', 'click', () => showPatientsTab());
+    on('tabScheduleBtn', 'click', () => showScheduleTab());
+    on('addPatientBtn', 'click', () => openModal());
+    on('refreshBtn', 'click', () => loadPatients());
+    on('printBtn', 'click', openPrintView);
+    on('pdfBtn', 'click', exportPdfFromBrowser);
+    on('schedulePrevBtn', 'click', () => { scheduleMonthOffset--; renderSchedule(); });
+    on('scheduleNextBtn', 'click', () => { scheduleMonthOffset++; renderSchedule(); });
+    on('scheduleTodayBtn', 'click', () => { scheduleMonthOffset = 0; renderSchedule(); });
     
-    // Search and filters
-    document.getElementById('searchInput').addEventListener('input', applyFilters);
-    document.getElementById('filterPriority').addEventListener('change', applyFilters);
-    document.getElementById('filterAuthor').addEventListener('change', applyFilters);
+    // Search and filters (debounced search)
+    on('searchInput', 'input', () => {
+        clearTimeout(_searchDebounceTimer);
+        _searchDebounceTimer = setTimeout(applyFilters, 250);
+    });
+    on('filterPriority', 'change', applyFilters);
+    on('filterAuthor', 'change', applyFilters);
     
     // Form
-    document.getElementById('patientForm').addEventListener('submit', handleFormSubmit);
-    document.getElementById('addAntibioticBtn').addEventListener('click', addAntibioticField);
+    on('patientForm', 'submit', handleFormSubmit);
+    on('addAntibioticBtn', 'click', addAntibioticField);
     
     // Admission date change
-    document.getElementById('admissionDate').addEventListener('change', () => {
-        const admissionDate = document.getElementById('admissionDate').value;
+    on('admissionDate', 'change', () => {
+        const admissionDate = $('admissionDate').value;
         if (admissionDate) {
             const dih = calculateDIH(admissionDate);
             console.log(`DIH: ${dih} dias`);
@@ -57,15 +83,17 @@ function setupEventListeners() {
 }
 
 function setDefaultAdmissionDate() {
-    const today = new Date().toISOString().split('T')[0];
-    document.getElementById('admissionDate').value = today;
+    const el = $('admissionDate');
+    if (el) {
+        el.value = new Date().toISOString().split('T')[0];
+    }
 }
 
 // API Functions
 async function loadPatients() {
     showLoading(true);
     try {
-        const response = await fetch(API_URL);
+        const response = await fetchWithTimeout(API_URL);
         const data = await response.json();
         
         if (data.success) {
@@ -77,7 +105,11 @@ async function loadPatients() {
         }
     } catch (error) {
         console.error('Error loading patients:', error);
-        showError('Erro de conexão. Verifique a URL da API.');
+        if (error.name === 'AbortError') {
+            showError('Tempo limite excedido ao carregar pacientes. Verifique sua conexão.');
+        } else {
+            showError('Erro de conexão. Verifique a URL da API.');
+        }
     } finally {
         showLoading(false);
     }
@@ -85,7 +117,7 @@ async function loadPatients() {
 
 async function savePatient(patientData, isNew = false) {
     try {
-        const response = await fetch(API_URL, {
+        const response = await fetchWithTimeout(API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -105,7 +137,11 @@ async function savePatient(patientData, isNew = false) {
         }
     } catch (error) {
         console.error('Error saving patient:', error);
-        showError('Erro ao salvar. Tente novamente.');
+        if (error.name === 'AbortError') {
+            showError('Tempo limite excedido ao salvar. Tente novamente.');
+        } else {
+            showError('Erro ao salvar. Tente novamente.');
+        }
     }
 }
 
@@ -115,7 +151,7 @@ async function deletePatient(patientId) {
     }
     
     try {
-        const response = await fetch(API_URL, {
+        const response = await fetchWithTimeout(API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -134,15 +170,22 @@ async function deletePatient(patientId) {
         }
     } catch (error) {
         console.error('Error deleting patient:', error);
-        showError('Erro ao excluir. Tente novamente.');
+        if (error.name === 'AbortError') {
+            showError('Tempo limite excedido ao excluir. Tente novamente.');
+        } else {
+            showError('Erro ao excluir. Tente novamente.');
+        }
     }
 }
 
 // Filter Functions
 function applyFilters() {
-    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-    const priorityFilter = document.getElementById('filterPriority').value;
-    const authorFilter = document.getElementById('filterAuthor').value;
+    const searchEl = $('searchInput');
+    const priorityEl = $('filterPriority');
+    const authorEl = $('filterAuthor');
+    const searchTerm = (searchEl ? searchEl.value : '').toLowerCase();
+    const priorityFilter = priorityEl ? priorityEl.value : '';
+    const authorFilter = authorEl ? authorEl.value : '';
     
     filteredPatients = allPatients.filter(patient => {
         // Search filter
@@ -168,7 +211,8 @@ function applyFilters() {
 
 function updateAuthorFilter() {
     const authors = [...new Set(allPatients.map(p => p.author).filter(Boolean))];
-    const filterSelect = document.getElementById('filterAuthor');
+    const filterSelect = $('filterAuthor');
+    if (!filterSelect) return;
     
     // Keep current selection
     const currentValue = filterSelect.value;
@@ -190,32 +234,33 @@ function updateAuthorFilter() {
 
 // Render Functions
 function showPatientsTab() {
-    document.getElementById('patientsView').style.display = 'block';
-    document.getElementById('scheduleView').style.display = 'none';
-    document.getElementById('tabPatientsBtn').classList.add('active');
-    document.getElementById('tabScheduleBtn').classList.remove('active');
+    var v = $('patientsView'); if (v) v.style.display = 'block';
+    var s = $('scheduleView'); if (s) s.style.display = 'none';
+    var tb = $('tabPatientsBtn'); if (tb) tb.classList.add('active');
+    var ts = $('tabScheduleBtn'); if (ts) ts.classList.remove('active');
 }
 
 function showScheduleTab() {
-    document.getElementById('patientsView').style.display = 'none';
-    document.getElementById('scheduleView').style.display = 'block';
-    document.getElementById('tabScheduleBtn').classList.add('active');
-    document.getElementById('tabPatientsBtn').classList.remove('active');
+    var v = $('patientsView'); if (v) v.style.display = 'none';
+    var s = $('scheduleView'); if (s) s.style.display = 'block';
+    var ts = $('tabScheduleBtn'); if (ts) ts.classList.add('active');
+    var tb = $('tabPatientsBtn'); if (tb) tb.classList.remove('active');
     renderSchedule();
 }
 
 function renderPatients() {
-    const grid = document.getElementById('patientsGrid');
-    const emptyState = document.getElementById('emptyState');
+    const grid = $('patientsGrid');
+    const emptyState = $('emptyState');
+    if (!grid) return;
     updatePrintView();
     
     if (filteredPatients.length === 0) {
         grid.innerHTML = '';
-        emptyState.style.display = 'flex';
+        if (emptyState) emptyState.style.display = 'flex';
         return;
     }
     
-    emptyState.style.display = 'none';
+    if (emptyState) emptyState.style.display = 'none';
     
     // Sort by priority (Alta > Média > Baixa)
     const priorityOrder = { 'Alta': 1, 'Média': 2, 'Baixa': 3 };
@@ -334,8 +379,9 @@ function renderAntibiotics(antibiotics) {
 
 // Modal Functions
 function openModal(patientId = null) {
-    const modal = document.getElementById('patientModal');
-    const form = document.getElementById('patientForm');
+    const modal = $('patientModal');
+    const form = $('patientForm');
+    if (!modal || !form) return;
     
     form.reset();
     currentAntibiotics = [];
@@ -343,11 +389,13 @@ function openModal(patientId = null) {
     if (patientId) {
         const patient = allPatients.find(p => p.id === patientId);
         if (patient) {
-            document.getElementById('modalTitle').textContent = 'Editar Paciente';
+            var title = $('modalTitle');
+            if (title) title.textContent = 'Editar Paciente';
             fillFormWithPatient(patient);
         }
     } else {
-        document.getElementById('modalTitle').textContent = 'Adicionar Paciente';
+        var title = $('modalTitle');
+        if (title) title.textContent = 'Adicionar Paciente';
         setDefaultAdmissionDate();
     }
     
@@ -355,25 +403,28 @@ function openModal(patientId = null) {
 }
 
 function closeModal() {
-    document.getElementById('patientModal').style.display = 'none';
-    document.getElementById('patientForm').reset();
+    var modal = $('patientModal');
+    if (modal) modal.style.display = 'none';
+    var form = $('patientForm');
+    if (form) form.reset();
     currentAntibiotics = [];
     renderAntibioticsEditor();
 }
 
 function fillFormWithPatient(patient) {
-    document.getElementById('patientId').value = patient.id;
-    document.getElementById('patientName').value = patient.name || '';
-    document.getElementById('bedNumber').value = patient.bedNumber || '';
-    document.getElementById('admissionDate').value = patient.admissionDate || '';
-    document.getElementById('priority').value = patient.priority || 'Baixa';
-    document.getElementById('diagnosis').value = patient.diagnosis || '';
-    document.getElementById('currentCondition').value = patient.currentCondition || '';
-    document.getElementById('pendingActions').value = patient.pendingActions || '';
-    document.getElementById('nextSteps').value = patient.nextSteps || '';
-    document.getElementById('shiftRole').value = patient.shiftRole || '';
-    document.getElementById('shiftDetails').value = patient.shiftDetails || '';
-    document.getElementById('author').value = patient.author || '';
+    function setVal(id, val) { var el = $(id); if (el) el.value = val; }
+    setVal('patientId', patient.id);
+    setVal('patientName', patient.name || '');
+    setVal('bedNumber', patient.bedNumber || '');
+    setVal('admissionDate', patient.admissionDate || '');
+    setVal('priority', patient.priority || 'Baixa');
+    setVal('diagnosis', patient.diagnosis || '');
+    setVal('currentCondition', patient.currentCondition || '');
+    setVal('pendingActions', patient.pendingActions || '');
+    setVal('nextSteps', patient.nextSteps || '');
+    setVal('shiftRole', patient.shiftRole || '');
+    setVal('shiftDetails', patient.shiftDetails || '');
+    setVal('author', patient.author || '');
     
     currentAntibiotics = normalizeAntibiotics(patient.antibiotics);
     renderAntibioticsEditor();
@@ -386,36 +437,45 @@ function editPatient(patientId) {
 async function handleFormSubmit(e) {
     e.preventDefault();
 
-    const existingId = document.getElementById('patientId').value;
-    const isNew = !existingId;
+    // Prevent double-submit
+    if (_isSubmitting) return;
+    _isSubmitting = true;
 
-    const nowISO = new Date().toISOString();
-    const patientData = {
-        id: existingId || generateId(),
-        name: document.getElementById('patientName').value.trim(),
-        bedNumber: document.getElementById('bedNumber').value.trim(),
-        admissionDate: document.getElementById('admissionDate').value,
-        priority: document.getElementById('priority').value,
-        diagnosis: document.getElementById('diagnosis').value.trim(),
-        currentCondition: document.getElementById('currentCondition').value.trim(),
-        pendingActions: document.getElementById('pendingActions').value.trim(),
-        nextSteps: document.getElementById('nextSteps').value.trim(),
-        shiftRole: document.getElementById('shiftRole').value.trim(),
-        shiftDetails: document.getElementById('shiftDetails').value.trim(),
-        author: document.getElementById('author').value.trim(),
-        antibiotics: collectAntibiotics(),
-        lastModified: nowISO
-    };
-    if (isNew) {
-        patientData.createdAt = nowISO;
+    try {
+        const existingId = ($('patientId') || {}).value || '';
+        const isNew = !existingId;
+
+        const nowISO = new Date().toISOString();
+        function val(id) { var el = $(id); return el ? el.value.trim() : ''; }
+        const patientData = {
+            id: existingId || generateId(),
+            name: val('patientName'),
+            bedNumber: val('bedNumber'),
+            admissionDate: ($('admissionDate') || {}).value || '',
+            priority: ($('priority') || {}).value || 'Baixa',
+            diagnosis: val('diagnosis'),
+            currentCondition: val('currentCondition'),
+            pendingActions: val('pendingActions'),
+            nextSteps: val('nextSteps'),
+            shiftRole: val('shiftRole'),
+            shiftDetails: val('shiftDetails'),
+            author: val('author'),
+            antibiotics: collectAntibiotics(),
+            lastModified: nowISO
+        };
+        if (isNew) {
+            patientData.createdAt = nowISO;
+        }
+
+        await savePatient(patientData, isNew);
+    } finally {
+        _isSubmitting = false;
     }
-
-    await savePatient(patientData, isNew);
 }
 
 // Antibiotic Functions
 function renderAntibioticsEditor() {
-    const container = document.getElementById('antibioticsList');
+    const container = $('antibioticsList');
     if (!container) return;
     const list = currentAntibiotics.length ? currentAntibiotics : [{ name: '', startDate: '' }];
     container.innerHTML = list.map((ab, index) => `
@@ -565,20 +625,30 @@ function shortenShift(code) {
 
 async function loadSchedule(monthKey) {
     try {
-        const response = await fetch(`${SCHEDULE_API}?month=${encodeURIComponent(monthKey)}`);
+        const response = await fetchWithTimeout(`${SCHEDULE_API}?month=${encodeURIComponent(monthKey)}`);
         const data = await response.json();
         return data.success ? data.entries || [] : [];
-    } catch {
+    } catch (error) {
+        console.error('Error loading schedule:', error);
         return [];
     }
 }
 
 async function saveScheduleEntry(entry) {
-    await fetch(SCHEDULE_API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entry })
-    });
+    try {
+        const response = await fetchWithTimeout(SCHEDULE_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ entry })
+        });
+        const data = await response.json();
+        if (!data.success) {
+            console.error('saveScheduleEntry failed:', data);
+        }
+    } catch (error) {
+        console.error('Error saving schedule entry:', error);
+        throw error; // re-throw so callers can handle
+    }
 }
 
 // Id helpers (Azure Table rowKey cannot contain / \ # ?)
@@ -607,8 +677,8 @@ function mergeScheduleEntries(seed, backendEntries) {
 }
 
 async function renderSchedule() {
-    const grid = document.getElementById('scheduleGrid');
-    const meta = document.getElementById('scheduleMeta');
+    const grid = $('scheduleGrid');
+    const meta = $('scheduleMeta');
     if (!grid || !meta) return;
 
     const now = new Date();
@@ -723,7 +793,7 @@ async function renderSchedule() {
 }
 
 function openScheduleEditor(dayKey, dayEntries, monthKey) {
-    const existing = document.getElementById('scheduleEditorModal');
+    const existing = $('scheduleEditorModal');
     if (existing) existing.remove();
 
     const isWeekend = isWeekendDay(dayKey, monthKey);
@@ -782,28 +852,37 @@ function openScheduleEditor(dayKey, dayEntries, monthKey) {
             payload[code][field] = inp.value.trim();
         });
         // Save each shift as its own record
-        await Promise.all(codes.map(code => {
-            const slot = payload[code] || { assignedTo: '', swapTo: '' };
-            return saveScheduleEntry({
-                id: makeShiftId(dayKey, code),
-                month: monthKey,
-                shift: SHIFT_LABELS[code],
-                assignedTo: slot.assignedTo,
-                swapTo: slot.swapTo,
-                notes: slot.swapTo ? `Troca: ${slot.swapTo}` : ''
-            });
-        }));
-        close();
-        await renderSchedule();
+        try {
+            await Promise.all(codes.map(code => {
+                const slot = payload[code] || { assignedTo: '', swapTo: '' };
+                return saveScheduleEntry({
+                    id: makeShiftId(dayKey, code),
+                    month: monthKey,
+                    shift: SHIFT_LABELS[code],
+                    assignedTo: slot.assignedTo,
+                    swapTo: slot.swapTo,
+                    notes: slot.swapTo ? `Troca: ${slot.swapTo}` : ''
+                });
+            }));
+            close();
+            await renderSchedule();
+        } catch (error) {
+            showError('Erro ao salvar escala. Tente novamente.');
+        }
     });
 
     modal.querySelector('#modalClearBtn').addEventListener('click', async () => {
-        await Promise.all(codes.map(code => {
-            const id = makeShiftId(dayKey, code);
-            return fetch(`${SCHEDULE_API}/${encodeURIComponent(id)}?month=${encodeURIComponent(monthKey)}`, { method: 'DELETE' });
-        }));
-        close();
-        await renderSchedule();
+        try {
+            await Promise.all(codes.map(code => {
+                const id = makeShiftId(dayKey, code);
+                return fetchWithTimeout(`${SCHEDULE_API}/${encodeURIComponent(id)}?month=${encodeURIComponent(monthKey)}`, { method: 'DELETE' });
+            }));
+            close();
+            await renderSchedule();
+        } catch (error) {
+            console.error('Error clearing schedule:', error);
+            showError('Erro ao limpar escala. Tente novamente.');
+        }
     });
 }
 
@@ -845,8 +924,8 @@ function escapeHtml(text) {
 }
 
 function showLoading(show) {
-    document.getElementById('loadingState').style.display = show ? 'flex' : 'none';
-    document.getElementById('patientsGrid').style.display = show ? 'none' : 'grid';
+    var ls = $('loadingState'); if (ls) ls.style.display = show ? 'flex' : 'none';
+    var pg = $('patientsGrid'); if (pg) pg.style.display = show ? 'none' : 'grid';
 }
 
 function showSuccess(message) {
@@ -858,8 +937,8 @@ function showError(message) {
 }
 
 function updatePrintView() {
-    const printList = document.getElementById('printList');
-    const printMeta = document.getElementById('printMeta');
+    const printList = $('printList');
+    const printMeta = $('printMeta');
     if (!printList || !printMeta) return;
 
     const sorted = [...filteredPatients].sort((a, b) => (a.bedNumber || '').localeCompare(b.bedNumber || '', 'pt-BR', { numeric: true }));
@@ -922,7 +1001,7 @@ function buildPrintHtml() {
 
 // Close modal when clicking outside
 window.addEventListener('click', function(event) {
-    const modal = document.getElementById('patientModal');
+    const modal = $('patientModal');
     if (modal && event.target === modal) {
         closeModal();
     }
@@ -932,11 +1011,11 @@ window.addEventListener('click', function(event) {
 document.addEventListener('keydown', (e) => {
     // ESC to close modal
     if (e.key === 'Escape') {
-        const modal = document.getElementById('patientModal');
+        const modal = $('patientModal');
         if (modal && modal.style.display !== 'none') {
             closeModal();
         }
-        const scheduleEditor = document.getElementById('scheduleEditorModal');
+        const scheduleEditor = $('scheduleEditorModal');
         if (scheduleEditor) {
             scheduleEditor.remove();
         }
@@ -945,6 +1024,7 @@ document.addEventListener('keydown', (e) => {
     // Ctrl/Cmd + K to focus search
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
-        document.getElementById('searchInput').focus();
+        var si = $('searchInput');
+        if (si) si.focus();
     }
 });
